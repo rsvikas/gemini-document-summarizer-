@@ -1,0 +1,5 @@
+{
+  "name": "AI Document Summarizer (Local & Private)",
+  "description": "An intelligent web application that uses a local, open-source AI model to extract text from documents and provide a concise summary of the content, all within your browser. Your data never leaves your computer.",
+  "requestFramePermissions": []
+}

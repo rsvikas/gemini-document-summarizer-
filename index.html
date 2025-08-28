@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Document Summarizer (Local & Private)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- Office Document Parsers -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <!-- Babel for in-browser JSX/TS transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- ES Module Shim for transformers.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/es-module-shims/1.10.0/es-module-shims.min.js" integrity="sha512-bF97E4xm7e9Yb5eRVKSs7BmMJ2kJ41k+B3jpBE8M0JvSTQ3e5OVu5iLecr5lM3g9Iq48zD/ODJyQsBf3K1/mxg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "@xenova/transformers": "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1"
+    }
+  }
+  </script>
+</head>
+  <body class="bg-slate-900 text-slate-200">
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+      import React, { useState, useCallback, useRef, useEffect } from 'react';
+      import ReactDOM from 'react-dom/client';
+
+      // --- Inlined from: services/localAIService.ts ---
+      class SummarizationPipeline {
+        static task = 'summarization';
+        static model = 'Xenova/distilbart-cnn-6-6';
+        static instance = null;
+
+        static async getInstance(progress_callback = null) {
+          if (this.instance === null) {
+            const { pipeline } = await import('@xenova/transformers');
+            this.instance = await pipeline(this.task, this.model, { progress_callback });
+          }
+          return this.instance;
+        }
+      }
+      
+      const summarizeText = async (text) => {
+          try {
+              const summarizer = await SummarizationPipeline.getInstance();
+              const output = await summarizer(text, {
+                  // Parameters tuned for longer, more detailed summaries
+                  min_new_tokens: 100,
+                  max_new_tokens: 400,
+                  length_penalty: 2.0, // A value > 1.0 encourages longer summaries
+                  no_repeat_ngram_size: 3,
+                  early_stopping: true,
+              });
+              return output[0].summary_text;
+          } catch (error) {
+              console.error("Error summarizing text with local model:", error);
+              throw new Error("Failed to generate summary. The AI model may have encountered an issue.");
+          }
+      };
+
+      // --- Inlined from: types.ts ---
+      const ProcessingState = {
+        INITIALIZING: 'INITIALIZING',
+        IDLE: 'IDLE',
+        EXTRACTING: 'EXTRACTING',
+        SUMMARIZING: 'SUMMARIZING',
+        SUCCESS: 'SUCCESS',
+        ERROR: 'ERROR',
+      };
+
+      // --- Inlined from: components/icons.tsx ---
+      const UploadIcon = () => (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mb-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+        </svg>
+      );
+
+      const Loader = ({ statusText }) => (
+          <div className="flex flex-col items-center justify-center text-center p-8">
+              <svg className="animate-spin h-12 w-12 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <p className="mt-4 text-lg font-medium text-slate-300">{statusText}</p>
+          </div>
+      );
+
+      const DocumentIcon = () => (
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+      );
+
+      // --- Inlined from: services/libraryVerifier.ts ---
+      const waitForLibraries = (timeout = 10000) => {
+          const startTime = Date.now();
+          const requiredLibraries = ['pdfjsLib', 'mammoth', 'XLSX'];
+
+          return new Promise((resolve, reject) => {
+              const checkLibraries = () => {
+                  const allLoaded = requiredLibraries.every(lib => typeof window[lib] !== 'undefined');
+
+                  if (allLoaded) {
+                      resolve();
+                  } else if (Date.now() - startTime > timeout) {
+                      const missing = requiredLibraries.filter(lib => typeof window[lib] === 'undefined');
+                      reject(new Error(`Could not load: ${missing.join(', ')}`));
+                  } else {
+                      setTimeout(checkLibraries, 100);
+                  }
+              };
+              checkLibraries();
+          });
+      };
+      
+      // --- Inlined from: services/fileUtils.ts ---
+      const extractTextFromFile = async (file) => {
+          const reader = new FileReader();
+
+          return new Promise((resolve, reject) => {
+            reader.onload = async (event) => {
+              try {
+                if (!event.target?.result) {
+                  return reject(new Error("File could not be read."));
+                }
+                
+                const buffer = event.target.result;
+                let text = '';
+                
+                if (file.type === 'application/pdf') {
+                  const { pdfjsLib } = window;
+                  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+                  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+                  let content = [];
+                  for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    content.push(textContent.items.map((item) => item.str).join(' '));
+                  }
+                  text = content.join('\n');
+                } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                  const result = await window.mammoth.extractRawText({ arrayBuffer: buffer });
+                  text = result.value;
+                } else if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+                  const workbook = window.XLSX.read(buffer, { type: 'buffer' });
+                  let content = [];
+                  workbook.SheetNames.forEach((sheetName) => {
+                    const roa = window.XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+                    if (roa.length) content.push(roa.map((row) => row.join("\t")).join("\n"));
+                  });
+                  text = content.join('\n\n');
+                } else if (file.type === 'text/plain' || file.type === 'text/markdown') {
+                  text = new TextDecoder().decode(buffer);
+                } else {
+                  throw new Error(`Unsupported file type: ${file.type}`);
+                }
+                resolve(text);
+              } catch (err) {
+                reject(err);
+              }
+            };
+            reader.onerror = (err) => reject(err);
+            reader.readAsArrayBuffer(file);
+          });
+        };
+      
+      // --- Inlined from: App.tsx ---
+      const App = () => {
+        const [processingState, setProcessingState] = useState(ProcessingState.INITIALIZING);
+        const [summary, setSummary] = useState('');
+        const [error, setError] = useState(null);
+        const [extractedText, setExtractedText] = useState('');
+        const [fileName, setFileName] = useState('');
+        const [initStatus, setInitStatus] = useState("Initializing document parsers...");
+        
+        const fileInputRef = useRef(null);
+
+        useEffect(() => {
+          const initializeApp = async () => {
+              try {
+                  await waitForLibraries();
+                  setInitStatus("Initializing AI model (this may take a moment on first load)...");
+                  await SummarizationPipeline.getInstance(); // This will download the model on first run
+                  setProcessingState(ProcessingState.IDLE);
+              } catch (err) {
+                  setError(`Initialization failed. Please check your internet connection and try reloading. Details: ${err.message}`);
+                  setProcessingState(ProcessingState.ERROR);
+              }
+          };
+          initializeApp();
+        }, []);
+
+        const resetState = useCallback(() => {
+          setProcessingState(ProcessingState.IDLE);
+          setSummary('');
+          setError(null);
+          setExtractedText('');
+          setFileName('');
+          if(fileInputRef.current) {
+              fileInputRef.current.value = '';
+          }
+        }, []);
+
+        const handleSummarize = async (text) => {
+          try {
+            setProcessingState(ProcessingState.SUMMARIZING);
+            const result = await summarizeText(text);
+            setSummary(result);
+            setProcessingState(ProcessingState.SUCCESS);
+          } catch (err) {
+            setError(`An error occurred during summarization: ${err.message}`);
+            setProcessingState(ProcessingState.ERROR);
+          }
+        };
+
+        const handleFileChange = async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+
+          resetState();
+          setFileName(file.name);
+          setProcessingState(ProcessingState.EXTRACTING);
+
+          try {
+              const text = await extractTextFromFile(file);
+              setExtractedText(text);
+              if (text.trim().length === 0) {
+                  setError('Could not extract any text from the document.');
+                  setProcessingState(ProcessingState.ERROR);
+                  return;
+              }
+              await handleSummarize(text);
+          } catch (err) {
+              setError(`Failed to process file: ${err.message}`);
+              setProcessingState(ProcessingState.ERROR);
+          }
+        };
+        
+        const handleDragOver = (e) => e.preventDefault();
+        const handleDrop = (e) => {
+          e.preventDefault();
+          if (fileInputRef.current && e.dataTransfer.files && e.dataTransfer.files[0]) {
+            fileInputRef.current.files = e.dataTransfer.files;
+            const changeEvent = new Event('change', { bubbles: true });
+            fileInputRef.current.dispatchEvent(changeEvent);
+          }
+        };
+        
+        const handleFileClick = () => fileInputRef.current?.click();
+
+        const renderContent = () => {
+          switch (processingState) {
+            case ProcessingState.INITIALIZING:
+              return <Loader statusText={initStatus} />;
+            case ProcessingState.IDLE:
+              return (
+                <div 
+                  className="flex flex-col items-center justify-center w-full h-full p-8 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer hover:bg-slate-800 transition-colors"
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
+                  onClick={handleFileClick}
+                  role="button"
+                  aria-label="File upload area"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === 'Enter' && handleFileClick()}
+                >
+                  <UploadIcon />
+                  <p className="text-lg font-semibold text-slate-300">Drag & drop a document here</p>
+                  <p className="text-slate-500">or click to select a file</p>
+                  <p className="text-xs text-slate-600 mt-4">Supports: PDF, DOCX, XLSX, TXT, MD</p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={handleFileChange}
+                    accept=".pdf,.docx,.xlsx,.txt,.md"
+                    aria-hidden="true"
+                  />
+                </div>
+              );
+            case ProcessingState.EXTRACTING:
+                return <Loader statusText="Extracting text from document..." />;
+            case ProcessingState.SUMMARIZING:
+              return <Loader statusText="Summarizing locally... this may take a moment." />;
+            case ProcessingState.ERROR:
+              return (
+                <div className="text-center p-8">
+                  <h3 className="text-xl font-semibold text-red-400 mb-4">Processing Failed</h3>
+                  <p className="bg-red-900/50 border border-red-700 text-red-300 p-4 rounded-md">{error}</p>
+                </div>
+              );
+            case ProcessingState.SUCCESS:
+              return (
+                <div className="w-full p-6 space-y-6">
+                  <div>
+                      <div className="flex items-center mb-2">
+                          <DocumentIcon />
+                          <h3 className="text-xl font-bold text-sky-400">{fileName}</h3>
+                      </div>
+                      <h4 className="text-lg font-semibold text-slate-200 mb-2">Summary</h4>
+                      <div className="bg-slate-800 p-4 rounded-lg max-h-60 overflow-y-auto prose prose-invert prose-sm">
+                        <p>{summary}</p>
+                      </div>
+                  </div>
+                  <div>
+                    <h4 className="text-lg font-semibold text-slate-200 mb-2">Original Text</h4>
+                    <textarea
+                      readOnly
+                      value={extractedText}
+                      className="w-full h-48 bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs text-slate-400 focus:ring-sky-500 focus:border-sky-500"
+                      aria-label="Extracted text"
+                    />
+                  </div>
+                </div>
+              );
+            default:
+              return null;
+          }
+        };
+
+        return (
+          <main className="min-h-screen w-full flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8">
+              <div className="w-full max-w-4xl">
+                  <header className="text-center mb-8">
+                      <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-emerald-500">
+                          AI Document Summarizer
+                      </h1>
+                      <p className="text-slate-400 mt-2 max-w-2xl mx-auto">
+                          Your document is processed and summarized entirely in your browser using a local AI model. Your data never leaves your computer.
+                      </p>
+                  </header>
+                  
+                  <div className="relative bg-slate-800/50 border border-slate-700 rounded-xl shadow-2xl shadow-slate-950/50 min-h-[400px] flex items-center justify-center transition-all duration-300">
+                      {renderContent()}
+                  </div>
+                  
+                  {(processingState !== ProcessingState.IDLE && processingState !== ProcessingState.INITIALIZING) && (
+                      <div className="text-center mt-6">
+                          <button
+                              onClick={resetState}
+                              className="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-6 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-sky-500"
+                          >
+                              Process Another Document
+                          </button>
+                      </div>
+                  )}
+              </div>
+          </main>
+        );
+      };
+
+      // --- Inlined from: index.tsx (Entry Point) ---
+      const rootElement = document.getElementById('root');
+      if (rootElement) {
+          const root = ReactDOM.createRoot(rootElement);
+          root.render(
+              <React.StrictMode>
+                  <App />
+              </React.StrictMode>
+          );
+      } else {
+          console.error('Failed to find the root element. The application cannot start.');
+      }
+    </script>
+  </body>
+</html>
