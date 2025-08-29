@@ -1,5 +1,5 @@
 {
-  "name": "AI Document Summarizer (Local & Private)",
-  "description": "An intelligent web application that uses a local, open-source AI model to extract text from documents and provide a concise summary of the content, all within your browser. Your data never leaves your computer.",
+  "name": "AI Document Summarizer (Powered by Gemini)",
+  "description": "An intelligent web application that uses Google's Gemini API to provide a concise summary of your documents.",
   "requestFramePermissions": []
 }

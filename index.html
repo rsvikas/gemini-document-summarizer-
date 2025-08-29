@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Document Summarizer (Local & Private)</title>
+    <title>AI Document Summarizer (Powered by Gemini)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -13,8 +13,6 @@
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <!-- Babel for in-browser JSX/TS transpilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- ES Module Shim for transformers.js -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/es-module-shims/1.10.0/es-module-shims.min.js" integrity="sha512-bF97E4xm7e9Yb5eRVKSs7BmMJ2kJ41k+B3jpBE8M0JvSTQ3e5OVu5iLecr5lM3g9Iq48zD/ODJyQsBf3K1/mxg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   
   <style>
     /* Custom scrollbar for the summary box to ensure it's always visible */
@@ -44,7 +42,7 @@
     "imports": {
       "react": "https://esm.sh/react@18.2.0",
       "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-      "@xenova/transformers": "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1"
+      "@google/genai": "https://esm.sh/@google/genai"
     }
   }
   </script>
@@ -54,40 +52,8 @@
     <script type="text/babel" data-type="module">
       import React, { useState, useCallback, useRef, useEffect } from 'react';
       import ReactDOM from 'react-dom/client';
-
-      // --- Inlined from: services/localAIService.ts ---
-      class SummarizationPipeline {
-        static task = 'summarization';
-        static model = 'Xenova/distilbart-cnn-6-6';
-        static instance = null;
-
-        static async getInstance(progress_callback = null) {
-          if (this.instance === null) {
-            const { pipeline } = await import('@xenova/transformers');
-            this.instance = await pipeline(this.task, this.model, { progress_callback });
-          }
-          return this.instance;
-        }
-      }
+      import { GoogleGenAI } from '@google/genai';
       
-      const summarizeText = async (text) => {
-          try {
-              const summarizer = await SummarizationPipeline.getInstance();
-              const output = await summarizer(text, {
-                  // Parameters tuned for longer, more detailed summaries
-                  min_new_tokens: 100,
-                  max_new_tokens: 400,
-                  length_penalty: 2.0, // A value > 1.0 encourages longer summaries
-                  no_repeat_ngram_size: 3,
-                  early_stopping: true,
-              });
-              return output[0].summary_text;
-          } catch (error) {
-              console.error("Error summarizing text with local model:", error);
-              throw new Error("Failed to generate summary. The AI model may have encountered an issue.");
-          }
-      };
-
       // --- Inlined from: types.ts ---
       const ProcessingState = {
         INITIALIZING: 'INITIALIZING',
@@ -111,7 +77,7 @@
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
-              <p className="mt-4 text-lg font-medium text-slate-300">{statusText}</p>
+              <p className="mt-4 text-lg font-medium text-slate-300 transition-all duration-300">{statusText}</p>
           </div>
       );
 
@@ -134,7 +100,7 @@
                       resolve();
                   } else if (Date.now() - startTime > timeout) {
                       const missing = requiredLibraries.filter(lib => typeof window[lib] === 'undefined');
-                      reject(new Error(`Could not load: ${missing.join(', ')}`));
+                      reject(new Error(`Could not load required document parsers: ${missing.join(', ')}`));
                   } else {
                       setTimeout(checkLibraries, 100);
                   }
@@ -201,7 +167,6 @@
         const [error, setError] = useState(null);
         const [extractedText, setExtractedText] = useState('');
         const [fileName, setFileName] = useState('');
-        const [initStatus, setInitStatus] = useState("Initializing document parsers...");
         
         const fileInputRef = useRef(null);
 
@@ -209,11 +174,9 @@
           const initializeApp = async () => {
               try {
                   await waitForLibraries();
-                  setInitStatus("Initializing AI model (this may take a moment on first load)...");
-                  await SummarizationPipeline.getInstance(); // This will download the model on first run
                   setProcessingState(ProcessingState.IDLE);
               } catch (err) {
-                  setError(`Initialization failed. Please check your internet connection and try reloading. Details: ${err.message}`);
+                  setError(`Initialization failed: ${err.message}`);
                   setProcessingState(ProcessingState.ERROR);
               }
           };
@@ -232,13 +195,42 @@
         }, []);
 
         const handleSummarize = async (text) => {
+          if (!process.env.API_KEY) {
+            setError("API_KEY environment variable not set. This is required for Google Gemini.");
+            setProcessingState(ProcessingState.ERROR);
+            return;
+          }
+
           try {
-            setProcessingState(ProcessingState.SUMMARIZING);
-            const result = await summarizeText(text);
-            setSummary(result);
-            setProcessingState(ProcessingState.SUCCESS);
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const model = 'gemini-2.5-flash';
+            const prompt = `Please provide a concise summary of the following document:\n\n---\n\n${text}`;
+
+            const response = await ai.models.generateContent({
+              model: model,
+              contents: prompt,
+            });
+            
+            const summaryText = response.text;
+            
+            if (summaryText) {
+                setSummary(summaryText.trim());
+                setProcessingState(ProcessingState.SUCCESS);
+            } else {
+                setError("The model could not generate a summary for this document.");
+                setProcessingState(ProcessingState.ERROR);
+            }
           } catch (err) {
-            setError(`An error occurred during summarization: ${err.message}`);
+            console.error(err);
+            let errorMessage = `An error occurred during summarization: ${err.message}`;
+            if (err.message?.includes('429')) {
+                errorMessage = "API rate limit exceeded. Please wait a moment and try again.";
+            } else if (err.message?.includes('SAFETY')) {
+                errorMessage = "The content could not be processed due to safety policies. Please check the document for any sensitive material.";
+            } else if (err.message?.includes('API key not valid')) {
+                errorMessage = "The provided Google AI API key is not valid. Please check your configuration.";
+            }
+            setError(errorMessage);
             setProcessingState(ProcessingState.ERROR);
           }
         };
@@ -259,7 +251,12 @@
                   setProcessingState(ProcessingState.ERROR);
                   return;
               }
-              await handleSummarize(text);
+              
+              setProcessingState(ProcessingState.SUMMARIZING);
+              setTimeout(() => {
+                handleSummarize(text);
+              }, 50);
+
           } catch (err) {
               setError(`Failed to process file: ${err.message}`);
               setProcessingState(ProcessingState.ERROR);
@@ -281,7 +278,7 @@
         const renderContent = () => {
           switch (processingState) {
             case ProcessingState.INITIALIZING:
-              return <Loader statusText={initStatus} />;
+              return <Loader statusText="Initializing document parsers..." />;
             case ProcessingState.IDLE:
               return (
                 <div 
@@ -311,7 +308,7 @@
             case ProcessingState.EXTRACTING:
                 return <Loader statusText="Extracting text from document..." />;
             case ProcessingState.SUMMARIZING:
-              return <Loader statusText="Summarizing locally... this may take a moment." />;
+              return <Loader statusText="Summarizing with Google AI..." />;
             case ProcessingState.ERROR:
               return (
                 <div className="text-center p-8">
@@ -328,8 +325,8 @@
                           <h3 className="text-xl font-bold text-sky-400">{fileName}</h3>
                       </div>
                       <h4 className="text-lg font-semibold text-slate-200 mb-2">Summary</h4>
-                      <div className="summary-content bg-slate-800 p-4 rounded-lg max-h-96 overflow-y-auto prose prose-invert prose-sm">
-                        <p>{summary}</p>
+                      <div className="summary-content bg-slate-800 p-4 rounded-lg max-h-96 overflow-y-auto whitespace-pre-wrap">
+                        {summary}
                       </div>
                   </div>
                   <div>
@@ -356,7 +353,7 @@
                           AI Document Summarizer
                       </h1>
                       <p className="text-slate-400 mt-2 max-w-2xl mx-auto">
-                          Your document is processed and summarized entirely in your browser using a local AI model. Your data never leaves your computer.
+                          An intelligent web application that uses Google's Gemini API to provide a concise summary of your documents.
                       </p>
                   </header>
                   

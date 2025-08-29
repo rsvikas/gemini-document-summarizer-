@@ -1,5 +1,5 @@
 {
-  "name": "ai-document-summarizer-(local-&-private)",
+  "name": "ai-document-summarizer-(powered-by-gemini)",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "react": "18.2.0",
-    "@xenova/transformers": "2.17.1"
+    "@google/genai": "latest"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
