@@ -1,5 +1,5 @@
 {
-  "name": "AI Document Summarizer (Powered by Gemini)",
-  "description": "An intelligent web application that uses Google's Gemini API to provide a concise summary of your documents.",
+  "name": "Local & Private AI Document Summarizer",
+  "description": "A privacy-focused web application that uses the DistilBART-CNN-12-6 model to summarize your documents directly in your browser. No data ever leaves your computer.",
   "requestFramePermissions": []
 }

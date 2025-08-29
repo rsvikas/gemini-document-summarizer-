@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Document Summarizer (Powered by Gemini)</title>
+    <title>Local & Private AI Document Summarizer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -35,6 +35,19 @@
       scrollbar-width: thin;
       scrollbar-color: #475569 #1e293b;
     }
+    .progress-bar-container {
+      width: 80%;
+      background-color: #334155; /* slate-700 */
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+    .progress-bar {
+      height: 12px;
+      background-color: #38bdf8; /* sky-400 */
+      border-radius: 8px;
+      transition: width 0.3s ease-in-out;
+    }
   </style>
 
   <script type="importmap">
@@ -42,7 +55,7 @@
     "imports": {
       "react": "https://esm.sh/react@18.2.0",
       "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-      "@google/genai": "https://esm.sh/@google/genai"
+      "@xenova/transformers": "https://cdn.jsdelivr.net/npm/@xenova/transformers@2/dist/transformers.min.js"
     }
   }
   </script>
@@ -52,7 +65,6 @@
     <script type="text/babel" data-type="module">
       import React, { useState, useCallback, useRef, useEffect } from 'react';
       import ReactDOM from 'react-dom/client';
-      import { GoogleGenAI } from '@google/genai';
       
       // --- Inlined from: types.ts ---
       const ProcessingState = {
@@ -71,13 +83,21 @@
         </svg>
       );
 
-      const Loader = ({ statusText }) => (
-          <div className="flex flex-col items-center justify-center text-center p-8">
+      const Loader = ({ statusText, progress, progressText }) => (
+          <div className="flex flex-col items-center justify-center text-center p-8 w-full">
               <svg className="animate-spin h-12 w-12 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
               <p className="mt-4 text-lg font-medium text-slate-300 transition-all duration-300">{statusText}</p>
+              {progress !== undefined && (
+                <div className="w-full max-w-xs mt-4">
+                  <div className="progress-bar-container mx-auto">
+                    <div className="progress-bar" style={{ width: `${progress}%` }}></div>
+                  </div>
+                  <p className="text-sm text-slate-400 mt-2">{progressText}</p>
+                </div>
+              )}
           </div>
       );
 
@@ -86,29 +106,22 @@
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
       );
-
-      // --- Inlined from: services/libraryVerifier.ts ---
-      const waitForLibraries = (timeout = 10000) => {
-          const startTime = Date.now();
-          const requiredLibraries = ['pdfjsLib', 'mammoth', 'XLSX'];
-
-          return new Promise((resolve, reject) => {
-              const checkLibraries = () => {
-                  const allLoaded = requiredLibraries.every(lib => typeof window[lib] !== 'undefined');
-
-                  if (allLoaded) {
-                      resolve();
-                  } else if (Date.now() - startTime > timeout) {
-                      const missing = requiredLibraries.filter(lib => typeof window[lib] === 'undefined');
-                      reject(new Error(`Could not load required document parsers: ${missing.join(', ')}`));
-                  } else {
-                      setTimeout(checkLibraries, 100);
-                  }
-              };
-              checkLibraries();
-          });
-      };
       
+      // --- Inlined from: services/summarizer.ts ---
+      class SummarizationPipeline {
+        static task = 'summarization';
+        static model = 'Xenova/distilbart-cnn-12-6';
+        static instance = null;
+
+        static async getInstance(progress_callback = null) {
+          if (this.instance === null) {
+            const { pipeline } = await import('@xenova/transformers');
+            this.instance = pipeline(this.task, this.model, { progress_callback });
+          }
+          return this.instance;
+        }
+      }
+
       // --- Inlined from: services/fileUtils.ts ---
       const extractTextFromFile = async (file) => {
           const reader = new FileReader();
@@ -167,13 +180,20 @@
         const [error, setError] = useState(null);
         const [extractedText, setExtractedText] = useState('');
         const [fileName, setFileName] = useState('');
+        const [modelLoadProgress, setModelLoadProgress] = useState({ progress: 0, status: 'Initializing...' });
         
         const fileInputRef = useRef(null);
 
         useEffect(() => {
           const initializeApp = async () => {
               try {
-                  await waitForLibraries();
+                  const progress_callback = (data) => {
+                      setModelLoadProgress({
+                          progress: Math.round(data.progress),
+                          status: data.status,
+                      });
+                  };
+                  await SummarizationPipeline.getInstance(progress_callback);
                   setProcessingState(ProcessingState.IDLE);
               } catch (err) {
                   setError(`Initialization failed: ${err.message}`);
@@ -195,23 +215,13 @@
         }, []);
 
         const handleSummarize = async (text) => {
-          if (!process.env.API_KEY) {
-            setError("API_KEY environment variable not set. This is required for Google Gemini.");
-            setProcessingState(ProcessingState.ERROR);
-            return;
-          }
-
           try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const model = 'gemini-2.5-flash';
-            const prompt = `Please provide a concise summary of the following document:\n\n---\n\n${text}`;
-
-            const response = await ai.models.generateContent({
-              model: model,
-              contents: prompt,
+            const summarizer = await SummarizationPipeline.getInstance();
+            const output = await summarizer(text, {
+              max_new_tokens: 200,
+              min_new_tokens: 50,
             });
-            
-            const summaryText = response.text;
+            const summaryText = output[0]?.summary_text;
             
             if (summaryText) {
                 setSummary(summaryText.trim());
@@ -223,13 +233,6 @@
           } catch (err) {
             console.error(err);
             let errorMessage = `An error occurred during summarization: ${err.message}`;
-            if (err.message?.includes('429')) {
-                errorMessage = "API rate limit exceeded. Please wait a moment and try again.";
-            } else if (err.message?.includes('SAFETY')) {
-                errorMessage = "The content could not be processed due to safety policies. Please check the document for any sensitive material.";
-            } else if (err.message?.includes('API key not valid')) {
-                errorMessage = "The provided Google AI API key is not valid. Please check your configuration.";
-            }
             setError(errorMessage);
             setProcessingState(ProcessingState.ERROR);
           }
@@ -253,7 +256,7 @@
               }
               
               setProcessingState(ProcessingState.SUMMARIZING);
-              setTimeout(() => {
+              setTimeout(() => { // Gives UI time to update to "Summarizing..."
                 handleSummarize(text);
               }, 50);
 
@@ -278,7 +281,13 @@
         const renderContent = () => {
           switch (processingState) {
             case ProcessingState.INITIALIZING:
-              return <Loader statusText="Initializing document parsers..." />;
+              return (
+                <Loader 
+                  statusText="Loading AI model..."
+                  progress={modelLoadProgress.progress}
+                  progressText={`${modelLoadProgress.status} (${modelLoadProgress.progress}%)`}
+                />
+              );
             case ProcessingState.IDLE:
               return (
                 <div 
@@ -308,7 +317,7 @@
             case ProcessingState.EXTRACTING:
                 return <Loader statusText="Extracting text from document..." />;
             case ProcessingState.SUMMARIZING:
-              return <Loader statusText="Summarizing with Google AI..." />;
+              return <Loader statusText="Summarizing on your device..." />;
             case ProcessingState.ERROR:
               return (
                 <div className="text-center p-8">
@@ -350,10 +359,10 @@
               <div className="w-full max-w-4xl">
                   <header className="text-center mb-8">
                       <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-emerald-500">
-                          AI Document Summarizer
+                          Local & Private AI Summarizer
                       </h1>
                       <p className="text-slate-400 mt-2 max-w-2xl mx-auto">
-                          An intelligent web application that uses Google's Gemini API to provide a concise summary of your documents.
+                          Summarize your documents securely on your own device. No data is ever uploaded to a server.
                       </p>
                   </header>
                   
